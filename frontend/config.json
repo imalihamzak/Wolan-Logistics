@@ -1,0 +1,58 @@
+{
+  "routes": [
+    {
+      "path": "/",
+      "src": "src/pages/Dashboard.tsx"
+    },
+    {
+      "path": "/orders",
+      "src": "src/pages/Orders.tsx"
+    },
+    {
+      "path": "/drivers",
+      "src": "src/pages/Drivers.tsx"
+    },
+    {
+      "path": "/map",
+      "src": "src/pages/LiveMap.tsx"
+    },
+    {
+      "path": "/merchants",
+      "src": "src/pages/Merchants.tsx"
+    },
+    {
+      "path": "/reports",
+      "src": "src/pages/Reports.tsx"
+    },
+    {
+      "path": "/hq",
+      "src": "src/pages/HQMaster.tsx"
+    },
+    {
+      "path": "/settings",
+      "src": "src/pages/Settings.tsx"
+    }
+  ],
+  "components": [
+    {
+      "name": "Header",
+      "src": "src/components/Header.tsx",
+      "route": "/preview/header"
+    },
+    {
+      "name": "Layout",
+      "src": "src/components/Layout.tsx",
+      "route": "/preview/layout"
+    },
+    {
+      "name": "Sidebar",
+      "src": "src/components/Sidebar.tsx",
+      "route": "/preview/sidebar"
+    },
+    {
+      "name": "StatCard",
+      "src": "src/components/StatCard.tsx",
+      "route": "/preview/stat-card"
+    }
+  ]
+}
