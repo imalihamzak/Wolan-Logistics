@@ -82,12 +82,25 @@ const buildOrderVariables = (order) => {
 const normalizeOutboundPhone = (phone) => {
   const raw = String(phone || '').trim();
   if (raw.startsWith('+')) {
-    return raw.replace(/\s+/g, '');
+    return `+${raw.slice(1).replace(/[^0-9]/g, '')}`;
   }
 
   const digits = raw.replace(/[^0-9]/g, '');
-  return digits ? `+${digits}` : '';
+  if (!digits) return '';
+  if (digits.startsWith('00')) return `+${digits.slice(2)}`;
+
+  const defaultCountryCode = String(process.env.SMS_DEFAULT_COUNTRY_CODE || '256').replace(/[^0-9]/g, '');
+  if (digits.startsWith('0') && defaultCountryCode) {
+    return `+${defaultCountryCode}${digits.replace(/^0+/, '')}`;
+  }
+  if (digits.length === 9 && defaultCountryCode) {
+    return `+${defaultCountryCode}${digits}`;
+  }
+
+  return `+${digits}`;
 };
+
+const isValidE164Phone = (phone) => /^\+[1-9]\d{7,14}$/.test(phone);
 
 const findUnresolvedTemplateVariables = (text = '') => {
   const matches = String(text).match(/\{[a-zA-Z0-9_]+\}/g) || [];
@@ -101,13 +114,23 @@ const isOtpNotification = (notification) => (
 );
 
 const canSimulateOtpSms = () => (
-  process.env.ALLOW_SIMULATED_OTP_SMS === 'true'
-  || process.env.EXPOSE_DEV_OTP === 'true'
+  process.env.NODE_ENV !== 'production'
+  && (
+    process.env.ALLOW_SIMULATED_OTP_SMS === 'true'
+    || process.env.EXPOSE_DEV_OTP === 'true'
+  )
+);
+
+const twilioIsConfigured = () => Boolean(
+  process.env.TWILIO_ACCOUNT_SID
+  && process.env.TWILIO_AUTH_TOKEN
+  && (process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_MESSAGING_SERVICE_SID)
 );
 
 const postFormRequest = ({ url, auth, form }) => new Promise((resolve, reject) => {
   const parsedUrl = new URL(url);
   const body = new URLSearchParams(form).toString();
+  const timeoutMs = Number(process.env.SMS_PROVIDER_TIMEOUT_MS || 15000);
 
   const req = https.request({
     method: 'POST',
@@ -142,6 +165,9 @@ const postFormRequest = ({ url, auth, form }) => new Promise((resolve, reject) =
   });
 
   req.on('error', reject);
+  req.setTimeout(timeoutMs, () => {
+    req.destroy(new Error(`SMS provider request timed out after ${timeoutMs}ms`));
+  });
   req.write(body);
   req.end();
 });
@@ -156,8 +182,13 @@ const sendTwilioSms = async ({ to, body }) => {
     throw new Error('Twilio SMS credentials are not configured');
   }
 
+  const normalizedTo = normalizeOutboundPhone(to);
+  if (!isValidE164Phone(normalizedTo)) {
+    throw new Error('Recipient phone must be a valid international E.164 number, e.g. +256761253001');
+  }
+
   const form = {
-    To: normalizeOutboundPhone(to),
+    To: normalizedTo,
     Body: body,
   };
 
@@ -183,6 +214,37 @@ const sendTwilioSms = async ({ to, body }) => {
 
 class NotificationService {
   /**
+   * Send authentication OTP directly to the phone provider.
+   * OTP values are intentionally not persisted in the general notification feed.
+   */
+  async sendOtpSms({ phone, otp, accountType, purpose, expiresMinutes }) {
+    const normalizedPhone = normalizeOutboundPhone(phone);
+    if (!isValidE164Phone(normalizedPhone)) {
+      throw new Error('OTP recipient phone must be a valid international E.164 number, e.g. +256761253001');
+    }
+
+    const message = `Your Wolan ${accountType} ${purpose} OTP is ${otp}. It expires in ${expiresMinutes} minutes.`;
+
+    if (twilioIsConfigured()) {
+      return sendTwilioSms({
+        to: normalizedPhone,
+        body: message,
+      });
+    }
+
+    if (canSimulateOtpSms()) {
+      return {
+        provider: 'development',
+        simulated: true,
+        status: 'simulated',
+        to: normalizedPhone,
+      };
+    }
+
+    throw new Error('Real Twilio SMS credentials are required for OTP delivery. Configure TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID, then restart the backend.');
+  }
+
+  /**
    * Send a notification
    */
   async send(type, category, recipient, templateKey, variables = {}, options = {}) {
@@ -195,6 +257,13 @@ class NotificationService {
       metadata = {},
       wait_for_provider = false,
     } = options;
+
+    if (
+      category === 'otp'
+      || String(templateKey || '').toLowerCase().includes('otp')
+    ) {
+      throw new Error('Authentication OTPs must use the secure direct phone delivery flow and cannot be persisted as notifications');
+    }
 
     const recipientId = toIdString(recipient?.id || recipient?._id || recipient?.recipient_id);
     if (!recipientId) {
@@ -366,11 +435,7 @@ class NotificationService {
       throw new Error('Recipient phone is required for SMS notifications');
     }
 
-    const twilioConfigured = Boolean(
-      process.env.TWILIO_ACCOUNT_SID
-      && process.env.TWILIO_AUTH_TOKEN
-      && (process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_MESSAGING_SERVICE_SID)
-    );
+    const twilioConfigured = twilioIsConfigured();
 
     if (isOtpNotification(notification) && !twilioConfigured && !canSimulateOtpSms()) {
       throw new Error('Real Twilio SMS credentials are required for OTP delivery. Check TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID in the backend environment, then restart the Node app.');

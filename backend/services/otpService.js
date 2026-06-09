@@ -134,34 +134,15 @@ const sendOtpChallenge = async ({
     user_agent: request?.headers?.['user-agent'] || null,
   });
 
+  let delivery = null;
   try {
-    await notificationService.send(
-      'sms',
-      'otp',
-      {
-        id: recipient.id || recipient._id || challenge._id,
-        phone: String(phone).trim(),
-        email: recipient.email,
-      },
-      'auth_otp',
-      {
-        otp,
-        account_type: ACCOUNT_LABELS[accountType],
-        purpose: PURPOSE_LABELS[purpose],
-        expires_minutes: OTP_EXPIRY_MINUTES,
-      },
-      {
-        priority: 'high',
-        related_type: recipient.related_type || null,
-        related_id: recipient.related_id || null,
-        metadata: {
-          account_type: accountType,
-          purpose,
-          challenge_id: String(challenge._id),
-        },
-        wait_for_provider: true,
-      }
-    );
+    delivery = await notificationService.sendOtpSms({
+      phone: String(phone).trim(),
+      otp,
+      accountType: ACCOUNT_LABELS[accountType],
+      purpose: PURPOSE_LABELS[purpose],
+      expiresMinutes: OTP_EXPIRY_MINUTES,
+    });
   } catch (error) {
     challenge.consumed_at = new Date();
     await challenge.save({ validateBeforeSave: false });
@@ -176,6 +157,8 @@ const sendOtpChallenge = async ({
       resend_after_seconds: OTP_RESEND_COOLDOWN_SECONDS,
       max_attempts: OTP_MAX_ATTEMPTS,
       challenge_id: challenge._id,
+      delivery_provider: delivery?.provider || null,
+      delivery_status: delivery?.status || null,
     },
   };
 };

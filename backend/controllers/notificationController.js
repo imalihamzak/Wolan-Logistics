@@ -20,6 +20,12 @@ const ACCOUNT_BOUND_CHANNELS = ['in_app', 'push'];
 const EXTERNAL_CONTACT_CHANNELS = ['sms', 'whatsapp', 'email'];
 const phonePattern = /^\+[1-9]\d{7,14}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SECURE_OTP_CATEGORY = 'otp';
+const withSecureOtpExcluded = (filter = {}) => ({
+  ...filter,
+  category: { $ne: SECURE_OTP_CATEGORY },
+  template_key: { $not: /otp/i },
+});
 
 const toPositiveInteger = (value, fallback, max = 100) => {
   const number = Number(value);
@@ -71,6 +77,18 @@ const assertNotificationCategory = (category) => {
 const assertNotificationPriority = (priority) => {
   if (!NOTIFICATION_PRIORITIES.includes(priority)) {
     throw new AppError(`priority must be one of ${NOTIFICATION_PRIORITIES.join(', ')}`, 400);
+  }
+};
+
+const assertNotAuthenticationOtp = ({ category, template_key }) => {
+  if (
+    category === SECURE_OTP_CATEGORY
+    || normalizeText(template_key).toLowerCase().includes('otp')
+  ) {
+    throw new AppError(
+      'Authentication OTPs are generated automatically and delivered directly to the registered phone number. They cannot be created or managed through Notifications.',
+      400,
+    );
   }
 };
 
@@ -126,6 +144,7 @@ const normalizeCreatePayload = (req, source = {}) => {
   assertNotificationType(type);
   assertNotificationCategory(category);
   assertNotificationPriority(priority);
+  assertNotAuthenticationOtp({ category, template_key });
   assertTemplateExists(type, template_key);
   assertRecipientContact({ type, recipient_phone, recipient_email, recipient_fcm_token });
   assertValidObjectId(source.related_id, 'related_id');
@@ -240,10 +259,15 @@ exports.getNotifications = asyncHandler(async (req, res) => {
     related_id,
   } = req.query;
 
-  const filter = {};
+  const filter = withSecureOtpExcluded();
   if (status) filter.status = status;
   if (type) filter.type = type;
-  if (category) filter.category = category;
+  if (category) {
+    if (category === SECURE_OTP_CATEGORY) {
+      throw new AppError('Authentication OTP records are not available through Notifications', 403);
+    }
+    filter.category = category;
+  }
   if (related_type) filter.related_type = related_type;
 
   if (recipient_id && isAdminRole(req.user.role)) {
@@ -287,7 +311,11 @@ exports.getNotifications = asyncHandler(async (req, res) => {
  * Get notification by ID
  */
 exports.getNotification = asyncHandler(async (req, res) => {
-  const notification = await getNotificationForAccess(req.params.id, req);
+  const notification = await getNotificationForAccess(
+    req.params.id,
+    req,
+    withSecureOtpExcluded(),
+  );
 
   return successResponse(res, 'Notification fetched successfully', { notification });
 });
@@ -402,7 +430,7 @@ exports.updateNotificationStatus = asyncHandler(async (req, res) => {
     updateData.failure_reason = failure_reason;
   }
 
-  const filter = applyAccessScope({ _id: id }, req);
+  const filter = applyAccessScope(withSecureOtpExcluded({ _id: id }), req);
   const notification = await Notification.findOneAndUpdate(
     filter,
     updateData,
@@ -422,7 +450,7 @@ exports.updateNotificationStatus = asyncHandler(async (req, res) => {
 exports.retryNotification = asyncHandler(async (req, res) => {
   assertValidObjectId(req.params.id, 'notification id');
 
-  const filter = applyAccessScope({ _id: req.params.id }, req);
+  const filter = applyAccessScope(withSecureOtpExcluded({ _id: req.params.id }), req);
   const notification = await Notification.findOne(filter);
   if (!notification) {
     throw new AppError('Notification not found', 404);
@@ -452,7 +480,7 @@ exports.retryNotification = asyncHandler(async (req, res) => {
 exports.deleteNotification = asyncHandler(async (req, res) => {
   assertValidObjectId(req.params.id, 'notification id');
 
-  const filter = applyAccessScope({ _id: req.params.id }, req);
+  const filter = applyAccessScope(withSecureOtpExcluded({ _id: req.params.id }), req);
   const notification = await Notification.findOneAndDelete(filter);
 
   if (!notification) {
@@ -468,7 +496,7 @@ exports.deleteNotification = asyncHandler(async (req, res) => {
 exports.getNotificationStats = asyncHandler(async (req, res) => {
   const { start_date, end_date } = req.query;
 
-  const match = applyAccessScope({}, req);
+  const match = applyAccessScope(withSecureOtpExcluded(), req);
   if (start_date || end_date) {
     match.createdAt = {};
     if (start_date) match.createdAt.$gte = new Date(start_date);
